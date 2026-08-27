@@ -21,6 +21,7 @@ function parseCoordinate(value: unknown): Coordinate | null {
   const lat=Number(values[0]), lon=Number(values[1]); return Number.isFinite(lat)&&Number.isFinite(lon)?[lon,lat]:null;
 }
 function meters(a:Coordinate,b:Coordinate){const lat=(a[1]+b[1])/2*Math.PI/180;return Math.hypot((a[0]-b[0])*111320*Math.cos(lat),(a[1]-b[1])*111320);}
+function bearing(a:Coordinate,b:Coordinate){const lat1=a[1]*Math.PI/180,lat2=b[1]*Math.PI/180,lon=(b[0]-a[0])*Math.PI/180;return Math.atan2(Math.sin(lon)*Math.cos(lat2),Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(lon))*180/Math.PI;}
 function clock(time:number){return new Date(time).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}).toLowerCase();}
 function dayKey(time:number){return new Date(time+7*3600000).toISOString().slice(0,10);}
 function daysBetween(a:string,b:string){return Math.max(1,Math.round((new Date(`${b}T12:00:00Z`).getTime()-new Date(`${a}T12:00:00Z`).getTime())/86400000)+1);}
@@ -114,7 +115,7 @@ function positionAt(story:Story,progress:number){
 function activeState(story:Story,progress:number){
   const route=story.route;
   const empty={type:'FeatureCollection',features:[] as any[]};
-  if(!route.length)return{features:empty,head:null as Coordinate|null,day:0};
+  if(!route.length)return{features:empty,head:null as Coordinate|null,bearing:0,day:0};
   const last=route.length-1;
   const{index,fraction,day}=positionAt(story,progress);
   const span=Math.max(4,Math.round(route.length*TRAIL_FRACTION));
@@ -124,8 +125,9 @@ function activeState(story:Story,progress:number){
   const reach=Math.max(1,index-tail);
   const nodes:{coord:Coordinate;seg:number;band:number}[]=[];
   for(let i=tail;i<=index;i++)nodes.push({coord:route[i].coord,seg:route[i].seg,band:Math.min(TRAIL_BANDS-1,Math.floor((i-tail)/reach*TRAIL_BANDS))});
-  let head=route[index].coord;
-  if(index<last){const a=route[index],b=route[index+1];if(a.seg===b.seg){head=[a.coord[0]+(b.coord[0]-a.coord[0])*fraction,a.coord[1]+(b.coord[1]-a.coord[1])*fraction];nodes.push({coord:head,seg:a.seg,band:TRAIL_BANDS-1});}}
+  let head=route[index].coord,heading:number|null=null;
+  if(index<last){const a=route[index],b=route[index+1];if(a.seg===b.seg){head=[a.coord[0]+(b.coord[0]-a.coord[0])*fraction,a.coord[1]+(b.coord[1]-a.coord[1])*fraction];heading=bearing(a.coord,b.coord);nodes.push({coord:head,seg:a.seg,band:TRAIL_BANDS-1});}}
+  if(heading===null&&index>0&&route[index-1].seg===route[index].seg)heading=bearing(route[index-1].coord,route[index].coord);
   const features:any[]=[];
   let current:Coordinate[]=[],band=0,seg=0,flushedSeg=-1;
   const flush=()=>{if(current.length>1){features.push({type:'Feature',properties:{t:(band+.5)/TRAIL_BANDS},geometry:{type:'LineString',coordinates:current}});flushedSeg=seg;}};
@@ -137,7 +139,7 @@ function activeState(story:Story,progress:number){
   }
   if(current.length>1)flush();
   else if(current.length===1&&features.length&&seg===flushedSeg)features[features.length-1].properties.t=1;
-  return{features:{type:'FeatureCollection',features},head,day};
+  return{features:{type:'FeatureCollection',features},head,bearing:heading??0,day};
 }
 
 function softenBaseMap(map:any){
@@ -177,16 +179,18 @@ function MapStage({story,progress,playing,follow,showPath,zoomOut,onReady}:{stor
       map.addSource('active-path',{type:'geojson',data:empty});map.addLayer({id:'active-halo',type:'line',source:'active-path',paint:{'line-color':['interpolate',['linear'],['get','t'],0,'rgba(247,242,232,0)',1,'rgba(247,242,232,0.86)'],'line-width':['interpolate',['linear'],['get','t'],0,3,1,10]},layout:{'line-cap':'round','line-join':'round'}});map.addLayer({id:'active-line',type:'line',source:'active-path',paint:{'line-color':['interpolate',['linear'],['get','t'],0,'rgba(232,121,89,0)',.4,'rgba(232,121,89,0.6)',1,'rgba(232,121,89,1)'],'line-width':['interpolate',['linear'],['get','t'],0,1.4,1,6]},layout:{'line-cap':'round','line-join':'round'}});
       map.addSource('full-path',{type:'geojson',data:empty});map.addLayer({id:'full-halo',type:'line',source:'full-path',paint:{'line-color':'#f7f2e8','line-width':10,'line-opacity':.8},layout:{'line-cap':'round','line-join':'round'}});map.addLayer({id:'full-line',type:'line',source:'full-path',paint:{'line-color':'#e87959','line-width':5.5,'line-opacity':.88},layout:{'line-cap':'round','line-join':'round'}});
       map.addSource('boundary',{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}}});map.addLayer({id:'boundary-fill',type:'fill',source:'boundary',paint:{'fill-color':'#91a883','fill-opacity':.045}});map.addLayer({id:'boundary-line',type:'line',source:'boundary',paint:{'line-color':'#5b564e','line-width':2,'line-dasharray':[3,3],'line-opacity':.72}});map.moveLayer('boundary-fill','path-halo');
-      map.addSource('head',{type:'geojson',data:empty});map.addLayer({id:'head-glow',type:'circle',source:'head',paint:{'circle-radius':16,'circle-color':'#f2c6ba','circle-opacity':.35}});map.addLayer({id:'head-ring',type:'circle',source:'head',paint:{'circle-radius':8,'circle-color':'#fbf7ef','circle-stroke-width':3,'circle-stroke-color':'#e58a6f'}});map.addLayer({id:'head-dot',type:'circle',source:'head',paint:{'circle-radius':2.5,'circle-color':'#e58a6f'}});
+      map.addSource('head',{type:'geojson',data:empty});map.addLayer({id:'head-glow',type:'circle',source:'head',paint:{'circle-radius':18,'circle-color':'#f2c6ba','circle-opacity':.3}});
+      const airplaneUrl=new URL('./paper-airplane.png',window.location.href).href;
+      map.loadImage(airplaneUrl).then((image:{data:HTMLImageElement|ImageBitmap})=>{if(mapRef.current!==map)return;if(!map.hasImage('paper-airplane'))map.addImage('paper-airplane',image.data,{pixelRatio:2});if(!map.getLayer('head-airplane'))map.addLayer({id:'head-airplane',type:'symbol',source:'head',layout:{'icon-image':'paper-airplane','icon-size':.34,'icon-rotate':['-', ['get','bearing'],45],'icon-rotation-alignment':'map','icon-allow-overlap':true,'icon-ignore-placement':true}});}).catch(()=>{});
       mapRef.current=map;setReady(true);onReady();});};
     if((window as any).maplibregl)load();else{if(!document.querySelector('link[data-maplibre]')){const l=document.createElement('link');l.rel='stylesheet';l.href='https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.css';l.dataset.maplibre='true';document.head.appendChild(l);}const current=document.querySelector('script[data-maplibre]') as HTMLScriptElement|null;if(current)current.addEventListener('load',load,{once:true});else{const s=document.createElement('script');s.src='https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js';s.dataset.maplibre='true';s.onload=load;document.head.appendChild(s);}}
     return()=>{markers.current.forEach(m=>m.remove());mapRef.current?.remove();mapRef.current=null;};},[]);
   useEffect(()=>{const map=mapRef.current;if(!ready||!map)return;const features=lineFeatures(story.segments);map.getSource('day-path')?.setData(features);map.getSource('full-path')?.setData(features);map.getSource('boundary')?.setData({type:'Feature',geometry:{type:'Polygon',coordinates:[episodeBoundary([...story.route.map(p=>p.coord),...story.places.map(p=>p.coord)])]}});lastDay.current=-1;markers.current.forEach(m=>m.remove());markers.current=[];for(const place of story.places){const el=document.createElement('div');el.className='place-label';const dot=document.createElement('i');const text=document.createElement('span');text.textContent=`${place.label} · ${clock(place.time)}`;el.append(dot,text);markers.current.push(new (window as any).maplibregl.Marker({element:el,anchor:'left'}).setLngLat(place.coord).addTo(map));}if(story.route.length){const bounds=new (window as any).maplibregl.LngLatBounds();story.route.forEach(p=>bounds.extend(p.coord));map.fitBounds(bounds,{padding:{top:130+zoomOut*22,bottom:145+zoomOut*20,left:60+zoomOut*24,right:60+zoomOut*24},bearing:0,duration:700});}},[story,ready,zoomOut]);
   useEffect(()=>{
     const map=mapRef.current;if(!ready||!map||!story.route.length)return;
-    const{features,head,day}=activeState(story,progress);
+    const{features,head,bearing,day}=activeState(story,progress);
     map.getSource('active-path')?.setData(features);
-    map.getSource('head')?.setData({type:'FeatureCollection',features:head?[{type:'Feature',properties:{},geometry:{type:'Point',coordinates:head}}]:[]});
+    map.getSource('head')?.setData({type:'FeatureCollection',features:head?[{type:'Feature',properties:{bearing},geometry:{type:'Point',coordinates:head}}]:[]});
     if(!head||!follow||!playing)return;
     if(story.dayRanges.length>1){
       if(day===lastDay.current)return;
