@@ -205,7 +205,7 @@ function MapStage({story,progress,playing,follow,showPath,zoomOut,onReady}:{stor
 
 export default function Home(){
   const [timeline,setTimeline]=useState<any>(null),[fileName,setFileName]=useState('no timeline loaded'),[dates,setDates]=useState<string[]>([]),[mode,setMode]=useState<'day'|'range'>('day'),[date,setDate]=useState(''),[startDate,setStartDate]=useState(''),[endDate,setEndDate]=useState(''),[from,setFrom]=useState('00:00'),[to,setTo]=useState('23:59'),[progress,setProgress]=useState(0),[playing,setPlaying]=useState(false),[length,setLength]=useState<'auto'|number>('auto'),[follow,setFollow]=useState(true),[showPath,setShowPath]=useState(true),[zoomOut,setZoomOut]=useState(2),[clean,setClean]=useState(false),[mapReady,setMapReady]=useState(false),[status,setStatus]=useState('Import your Timeline.json to begin');
-  const raf=useRef<number|null>(null),progressRef=useRef(0);
+  const raf=useRef<number|null>(null),progressRef=useRef(0),runMsRef=useRef(18000);
   const story=useMemo(()=>{
     if(!timeline)return emptyStory;
     if(mode==='day')return date?storyFromTimeline(timeline,date,date,from,to):emptyStory;
@@ -215,10 +215,10 @@ export default function Home(){
   const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{const file=e.target.files?.[0];if(!file)return;setStatus('Reading your Timeline…');try{const data=JSON.parse(await file.text()),segments=Array.isArray(data)?data:data?.semanticSegments??[],found=[...new Set<string>(segments.map((s:any)=>String(s?.startTime??'').slice(0,10)).filter((v:string)=>/^\d{4}-\d{2}-\d{2}$/.test(v)))].sort().reverse();if(!found.length)throw new Error('No dated Timeline entries found');setTimeline(data);setDates(found);setFileName(file.name);setDate(found[0]);setEndDate(found[0]);setStartDate(found[Math.min(found.length-1,29)]);setStatus(`${found.length.toLocaleString()} days ready · choose a day or a range and press play`);}catch(err){setStatus(err instanceof Error?err.message:'Could not read Timeline.json');}};
   const pickStart=(value:string)=>{setStartDate(value);if(value>endDate)setEndDate(value);};
   const pickEnd=(value:string)=>{setEndDate(value);if(value<startDate)setStartDate(value);};
-  const togglePlay=()=>{if(playing){if(raf.current)cancelAnimationFrame(raf.current);setPlaying(false);return;}if(progressRef.current>=.999){progressRef.current=0;setProgress(0);}setPlaying(true);const started=performance.now(),origin=progressRef.current,duration=(1-origin)*runMs;const step=(now:number)=>{const next=Math.min(1,origin+(now-started)/duration*(1-origin));progressRef.current=next;setProgress(next);if(next<1)raf.current=requestAnimationFrame(step);else setPlaying(false);};raf.current=requestAnimationFrame(step);};
+  const togglePlay=()=>{if(playing){if(raf.current)cancelAnimationFrame(raf.current);setPlaying(false);return;}if(progressRef.current>=.999){progressRef.current=0;setProgress(0);}setPlaying(true);let last=performance.now();const step=(now:number)=>{const next=Math.min(1,progressRef.current+(now-last)/runMsRef.current);last=now;progressRef.current=next;setProgress(next);if(next<1)raf.current=requestAnimationFrame(step);else setPlaying(false);};raf.current=requestAnimationFrame(step);};
   const scrub=(value:number)=>{if(raf.current)cancelAnimationFrame(raf.current);setPlaying(false);progressRef.current=value;setProgress(value);};
   const recordedDays=story.dayRanges.length||1;
-  const runMs=length==='auto'?autoDuration(recordedDays):length;
+  const runMs=length==='auto'?autoDuration(recordedDays):length;runMsRef.current=runMs;
   const pace=recordedDays/(runMs/1000);
   const current=story.route.length?story.route[positionAt(story,progress).index]:null;
   const ranged=mode==='range'&&story.days>1;
